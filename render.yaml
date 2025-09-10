@@ -2,7 +2,6 @@
 services:
   - type: web
     name: language-teacher-bot
-    runtime: java
     buildCommand: ./mvnw clean package
     startCommand: java -jar target/*.jar
     envVars:
