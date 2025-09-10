@@ -1,11 +1,10 @@
 # src/main/resources/application.yml
 
 server:
-  port: ${PORT:8080} # Используем PORT из среды (для Render), иначе 8080
+  port: ${PORT:8080}
 
 spring:
   datasource:
-    # Используем in-memory H2.
     url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
     driver-class-name: org.h2.Driver
     username: sa
@@ -13,7 +12,6 @@ spring:
 
   jpa:
     hibernate:
-      # Всегда создаем таблицы при запуске
       ddl-auto: create
     show-sql: true
     database-platform: org.hibernate.dialect.H2Dialect
@@ -23,16 +21,10 @@ spring:
       # Отключаем H2 Console в облаке
       enabled: false
 
-  # Настройки инициализации SQL скриптов
   sql:
     init:
       mode: always
       data-locations: classpath:data.sql
-
-# Токен бота будет задаваться через application.properties или переменную окружения
-# telegram:
-#   bot:
-#     token: YOUR_TOKEN_HERE # <-- Эта строка удаляется
 
 logging:
   level:
