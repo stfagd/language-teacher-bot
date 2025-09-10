@@ -1,4 +1,3 @@
-// src/main/java/com/example/languageteacherbot/entity/Word.java
 package com.example.languageteacherbot.entity;
 
 import jakarta.persistence.*;
@@ -18,14 +17,14 @@ public class Word {
     private Long id;
 
     @Column(nullable = false)
-    private String word;
+    private String word; // Слово на целевом языке
 
     @Column(nullable = false)
-    private String translation;
+    private String translation; // Перевод на родной язык
 
     @Column(nullable = false)
-    private String level;
+    private String level; // "A1", "A2", ..., "C2"
 
     @Column(nullable = false)
-    private String lang;
+    private String lang; // Язык слова ("ru" или "zh")
 }

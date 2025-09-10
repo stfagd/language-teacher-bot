@@ -1,4 +1,3 @@
-// src/main/java/com/example/languageteacherbot/entity/UserWord.java
 package com.example.languageteacherbot.entity;
 
 import jakarta.persistence.*;
@@ -25,5 +24,5 @@ public class UserWord {
     private Word word;
 
     @Column(name = "marked_as_unknown", nullable = false)
-    private boolean markedAsUnknown = true;
+    private boolean markedAsUnknown = true; // По умолчанию отмечено как "не знаю"
 }

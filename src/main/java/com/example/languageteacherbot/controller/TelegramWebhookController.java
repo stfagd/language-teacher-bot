@@ -1,4 +1,3 @@
-// src/main/java/com/example/languageteacherbot/controller/TelegramWebhookController.java
 package com.example.languageteacherbot.controller;
 
 import com.example.languageteacherbot.service.TelegramService;

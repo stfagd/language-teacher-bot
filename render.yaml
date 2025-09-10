@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: language-teacher-bot
+    runtime: java
+    buildCommand: ./mvnw clean package
+    startCommand: java -jar target/*.jar
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false

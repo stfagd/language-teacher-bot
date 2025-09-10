@@ -1,4 +1,3 @@
-// src/main/java/com/example/languageteacherbot/repository/UserWordRepository.java
 package com.example.languageteacherbot.repository;
 
 import com.example.languageteacherbot.entity.UserWord;

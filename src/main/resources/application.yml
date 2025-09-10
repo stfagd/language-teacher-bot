@@ -1,7 +1,6 @@
 # src/main/resources/application.yml
 server:
   port: ${PORT:8080}
-
 spring:
   datasource:
     url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
@@ -11,11 +10,9 @@ spring:
 
   jpa:
     hibernate:
-      # Hibernate создаст схему из сущностей
       ddl-auto: create
     show-sql: true
     database-platform: org.hibernate.dialect.H2Dialect
-    # Эта настройка заставит Hibernate выполнить data.sql после создания схемы
     defer-datasource-initialization: true
 
   h2:
