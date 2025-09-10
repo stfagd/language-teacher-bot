@@ -1,4 +1,3 @@
--- src/main/resources/data.sql
 INSERT INTO words (word, translation, level, lang) VALUES
 ('привет', 'hello', 'A1', 'ru'),
 ('спасибо', 'thank you', 'A1', 'ru'),
