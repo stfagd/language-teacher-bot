@@ -17,14 +17,14 @@ public class Word {
     private Long id;
 
     @Column(nullable = false)
-    private String word; // Слово на целевом языке
+    private String word;
 
     @Column(nullable = false)
-    private String translation; // Перевод на родной язык
+    private String translation;
 
     @Column(nullable = false)
-    private String level; // "A1", "A2", ..., "C2"
+    private String level;
 
     @Column(nullable = false)
-    private String lang; // Язык слова ("ru" или "zh")
+    private String lang;
 }

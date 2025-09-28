@@ -1,9 +1,9 @@
 # render.yaml
 services:
   - type: web
-    name: language-teacher-bot # Замените на ваше название, если хотите
+    name: language-teacher-bot
     buildCommand: ./mvnw clean package
     startCommand: java -jar target/*.jar
     envVars:
       - key: TELEGRAM_BOT_TOKEN
-        sync: false # Это означает, что значение нужно задать вручную в Dashboard Render
+        sync: false

@@ -24,5 +24,5 @@ public class UserWord {
     private Word word;
 
     @Column(name = "marked_as_unknown", nullable = false)
-    private boolean markedAsUnknown = true; // По умолчанию отмечено как "не знаю"
+    private boolean markedAsUnknown = true;
 }

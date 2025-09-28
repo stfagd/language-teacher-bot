@@ -14,13 +14,13 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 public class User {
     @Id
-    private Long chatId; // Используем chatId как первичный ключ
+    private Long chatId;
 
     private String firstName;
     private String lastName;
-    private String nativeLanguage; // "ru" или "zh"
-    private String targetLanguage; // "ru" или "zh"
-    private String level; // "A1", "A2", ..., "C2"
+    private String nativeLanguage;
+    private String targetLanguage;
+    private String level;
     private LocalDateTime registeredAt;
     private LocalDateTime lastActivityAt;
 }

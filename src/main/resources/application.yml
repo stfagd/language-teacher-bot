@@ -1,6 +1,6 @@
 # src/main/resources/application.yml
 server:
-  port: ${PORT:8080} # Используем PORT из среды (для Render), иначе 8080
+  port: ${PORT:8080}
 
 spring:
   datasource:
@@ -11,18 +11,15 @@ spring:
 
   jpa:
     hibernate:
-      # <<< КРИТИЧЕСКИ ВАЖНО >>>
-      # Hibernate создаст схему БД из сущностей @Entity *до* выполнения data.sql
       ddl-auto: create
     show-sql: true
     database-platform: org.hibernate.dialect.H2Dialect
 
-  # <<< КРИТИЧЕСКИ ВАЖНО >>>
-  # Включаем инициализацию из data.sql ПОСЛЕ создания схемы Hibernate
   sql:
     init:
-      mode: always
-      data-locations: classpath:data.sql # Указываем наш скрипт
+      mode: never
+      # data-locations: classpath:data.sql
+      # encoding: UTF-8
 
 logging:
   level:
