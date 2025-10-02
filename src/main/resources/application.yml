@@ -1,6 +1,9 @@
-# src/main/resources/application.yml
 server:
   port: ${PORT:8080}
+
+telegram:
+  bot:
+    token: ${TELEGRAM_BOT_TOKEN}
 
 spring:
   datasource:
@@ -18,8 +21,6 @@ spring:
   sql:
     init:
       mode: never
-      # data-locations: classpath:data.sql
-      # encoding: UTF-8
 
 logging:
   level:

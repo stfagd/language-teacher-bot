@@ -27,4 +27,7 @@ public class Word {
 
     @Column(nullable = false)
     private String lang;
+
+    @Column(name = "transcription", nullable = true)
+    private String transcription;
 }

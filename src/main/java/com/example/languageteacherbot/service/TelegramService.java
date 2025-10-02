@@ -10,9 +10,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Service
@@ -36,6 +39,7 @@ public class TelegramService {
     private final Map<Long, FlashcardGameSession> activeFlashcardGames = new HashMap<>();
     private final Map<Long, SentenceGameSession> activeSentenceGames = new HashMap<>();
     private final Map<Long, Map<String, Long>> userWordDeleteMap = new HashMap<>();
+    private final Map<Long, Integer> userDictionaryPage = new ConcurrentHashMap<>();
 
     public void sendMessage(Long chatId, String text) {
         sendMessageWithButtons(chatId, text, null);
@@ -77,6 +81,27 @@ public class TelegramService {
     @SuppressWarnings("unchecked")
     public void processUpdate(Map<String, Object> update) {
         try {
+            if (update.containsKey("callback_query")) {
+                Map<String, Object> callbackQuery = (Map<String, Object>) update.get("callback_query");
+                String data = (String) callbackQuery.get("data");
+                Map<String, Object> message = (Map<String, Object>) callbackQuery.get("message");
+                Long chatId = ((Number) ((Map<String, Object>) message.get("chat")).get("id")).longValue();
+                Integer messageId = ((Number) message.get("message_id")).intValue();
+
+                if (data.startsWith("dict_prev:")) {
+                    int page = Integer.parseInt(data.split(":")[1]);
+                    userDictionaryPage.put(chatId, page);
+                    editMessageWithDictionary(chatId, messageId);
+                } else if (data.startsWith("dict_next:")) {
+                    int page = Integer.parseInt(data.split(":")[1]);
+                    userDictionaryPage.put(chatId, page);
+                    editMessageWithDictionary(chatId, messageId);
+                } else if (data.equals("main_menu")) {
+                    showMainMenu(chatId);
+                }
+                return;
+            }
+
             Map<String, Object> message = (Map<String, Object>) update.get("message");
             if (message == null) return;
 
@@ -107,6 +132,7 @@ public class TelegramService {
                 case IN_MY_WORDS -> handleMyWordsCommand(chatId, text);
                 case IN_SENTENCE_GAME -> handleSentenceGameInput(chatId, text);
                 case IN_SETTINGS -> handleSettingsCommand(chatId, text);
+                case IN_DICTIONARY -> handleDictionaryCommand(chatId, text);
                 case AWAITING_NEW_NATIVE_LANG -> handleNewNativeLanguageSelection(chatId, text);
                 case AWAITING_NEW_TARGET_LANG -> handleNewTargetLanguageSelection(chatId, text);
                 case AWAITING_NEW_LEVEL -> handleNewLevelSelection(chatId, text);
@@ -310,6 +336,7 @@ public class TelegramService {
         if (command.equals(gamesCmd)) {
             showGamesMenu(chatId);
         } else if (command.equals(dictCmd)) {
+            userDictionaryPage.put(chatId, 0);
             showDictionary(chatId);
         } else if (command.equals(myWordsCmd)) {
             showMyWords(chatId);
@@ -321,6 +348,26 @@ public class TelegramService {
             } else {
                 handleStart(chatId, "User", "");
             }
+        } else if (command.equals(nativeLang.equals("ru") ? "Flash card (Карточки)" : "Flash card (单词卡片)")) {
+            startFlashcardGame(chatId);
+        } else if (command.equals(nativeLang.equals("ru") ? "Sentence (Составить предложение)" : "Sentence (造句)")) {
+            startSentenceGame(chatId);
+        } else if (command.equals(nativeLang.equals("ru") ? "⬅️ Назад" : "⬅️ 上一页")) {
+            int currentPage = userDictionaryPage.getOrDefault(chatId, 0);
+            if (currentPage > 0) {
+                userDictionaryPage.put(chatId, currentPage - 1);
+            }
+            showDictionary(chatId);
+        } else if (command.equals(nativeLang.equals("ru") ? "Вперёд ➡️" : "下一页 ➡️")) {
+            int currentPage = userDictionaryPage.getOrDefault(chatId, 0);
+            int totalPages = (int) Math.ceil((double) wordRepository.findByLevelAndLang(
+                userOpt.get().getLevel(), userOpt.get().getTargetLanguage()).size() / 30.0);
+            if (currentPage < totalPages - 1) {
+                userDictionaryPage.put(chatId, currentPage + 1);
+            }
+            showDictionary(chatId);
+        } else if (command.equals(nativeLang.equals("ru") ? "🔙 Главное меню" : "🔙 主菜单")) {
+            showMainMenu(chatId);
         } else {
             String message = nativeLang.equals("ru") ? "Неизвестная команда. Пожалуйста, используй меню." : "未知命令。请使用菜单。";
             sendMessage(chatId, message);
@@ -583,9 +630,12 @@ public class TelegramService {
             return;
         }
         User user = userOpt.get();
+        String level = user.getLevel();
+        String targetLang = user.getTargetLanguage();
 
-        List<Word> words = wordRepository.findByLevelAndLang(user.getLevel(), user.getTargetLanguage());
-        if (words.isEmpty()) {
+        List<Word> allWords = wordRepository.findByLevelAndLang(level, targetLang);
+
+        if (allWords.isEmpty()) {
             String nativeLang = user.getNativeLanguage();
             String message = nativeLang.equals("ru") ? "😔 Нет слов для этого уровня." : "😔 此级别没有单词。";
             sendMessage(chatId, message);
@@ -593,25 +643,204 @@ public class TelegramService {
             return;
         }
 
-        String nativeLang = user.getNativeLanguage();
-        String dictTitle = nativeLang.equals("ru") ? "📘 *Словарь (Уровень " : "📘 *词典 (级别 ";
-        String dictEnd = nativeLang.equals("ru") ? ")*\n\n" : ")*\n\n";
+        int currentPage = userDictionaryPage.getOrDefault(chatId, 0);
+        int pageSize = 30;
+        int totalPages = (int) Math.ceil((double) allWords.size() / pageSize);
+
+        if (currentPage >= totalPages) {
+            currentPage = Math.max(0, totalPages - 1);
+            userDictionaryPage.put(chatId, currentPage);
+        }
+        if (currentPage < 0) {
+            currentPage = 0;
+            userDictionaryPage.put(chatId, currentPage);
+        }
+
+        int fromIndex = currentPage * pageSize;
+        int toIndex = Math.min(fromIndex + pageSize, allWords.size());
+        List<Word> wordsOnPage = allWords.subList(fromIndex, toIndex);
 
         StringBuilder sb = new StringBuilder();
-        sb.append(dictTitle).append(user.getLevel()).append(dictEnd);
+        String nativeLang = user.getNativeLanguage();
 
-        for (int i = 0; i < Math.min(words.size(), 30); i++) {
-            Word w = words.get(i);
-            sb.append(w.getWord()).append(" - ").append(w.getTranslation()).append("\n");
-        }
-        if (words.size() > 30) {
-            String andMore = nativeLang.equals("ru") ? "\n... и ещё " : "\n... 还有 ";
-            String wordsLeft = nativeLang.equals("ru") ? " слов." : " 个单词。";
-            sb.append(andMore).append(words.size() - 30).append(wordsLeft);
+        if (nativeLang.equals("ru")) {
+            sb.append("📖 Словарь (").append(currentPage + 1).append("/").append(totalPages).append("):\n\n");
+        } else {
+            sb.append("📖 词典 (").append(currentPage + 1).append("/").append(totalPages).append("):\n\n");
         }
 
-        sendMessage(chatId, sb.toString());
-        showMainMenu(chatId);
+        for (Word w : wordsOnPage) {
+            String wordLine;
+            if (w.getTranscription() != null && !w.getTranscription().isEmpty()) {
+                wordLine = "• " + w.getWord() + " (" + w.getTranscription() + ") — " + w.getTranslation();
+            } else {
+                wordLine = "• " + w.getWord() + " — " + w.getTranslation();
+            }
+            sb.append(wordLine).append("\n");
+        }
+
+        InlineKeyboardMarkup keyboard = createDictionaryInlineKeyboard(chatId, currentPage, totalPages, nativeLang);
+
+        sendMessageWithInlineKeyboard(chatId, sb.toString(), keyboard);
+    }
+
+    private void sendMessageWithInlineKeyboard(Long chatId, String text, InlineKeyboardMarkup keyboard) {
+        try {
+            Map<String, Object> request = new HashMap<>();
+            request.put("chat_id", chatId);
+            request.put("text", text);
+            request.put("parse_mode", "Markdown");
+            request.put("reply_markup", keyboard);
+
+            RestTemplate restTemplate = new RestTemplate();
+            restTemplate.postForObject(SEND_MESSAGE_URL + BOT_TOKEN + "/sendMessage", request, String.class);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private InlineKeyboardMarkup createDictionaryInlineKeyboard(Long chatId, int currentPage, int totalPages, String nativeLang) {
+        InlineKeyboardMarkup keyboard = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+
+        List<InlineKeyboardButton> navRow = new ArrayList<>();
+        if (currentPage > 0) {
+            InlineKeyboardButton backButton = new InlineKeyboardButton();
+            backButton.setText(nativeLang.equals("ru") ? "⬅️ Назад" : "⬅️ 上一页");
+            backButton.setCallbackData("dict_prev:" + (currentPage - 1));
+            navRow.add(backButton);
+        }
+        if (currentPage < totalPages - 1) {
+            InlineKeyboardButton nextButton = new InlineKeyboardButton();
+            nextButton.setText(nativeLang.equals("ru") ? "Вперёд ➡️" : "下一页 ➡️");
+            nextButton.setCallbackData("dict_next:" + (currentPage + 1));
+            navRow.add(nextButton);
+        }
+
+        if (!navRow.isEmpty()) {
+            rows.add(navRow);
+        }
+
+        List<InlineKeyboardButton> menuRow = new ArrayList<>();
+        InlineKeyboardButton menuButton = new InlineKeyboardButton();
+        menuButton.setText(nativeLang.equals("ru") ? "🔙 Главное меню" : "🔙 主菜单");
+        menuButton.setCallbackData("main_menu");
+        menuRow.add(menuButton);
+        rows.add(menuRow);
+
+        keyboard.setKeyboard(rows);
+        return keyboard;
+    }
+
+    private void editMessageWithDictionary(Long chatId, Integer messageId) {
+        Optional<User> userOpt = userRepository.findByChatId(chatId);
+        if (userOpt.isEmpty()) return;
+
+        User user = userOpt.get();
+        String level = user.getLevel();
+        String targetLang = user.getTargetLanguage();
+
+        List<Word> allWords = wordRepository.findByLevelAndLang(level, targetLang);
+        int pageSize = 30;
+        int totalPages = (int) Math.ceil((double) allWords.size() / pageSize);
+
+        int currentPage = userDictionaryPage.getOrDefault(chatId, 0);
+
+        int fromIndex = currentPage * pageSize;
+        int toIndex = Math.min(fromIndex + pageSize, allWords.size());
+        List<Word> wordsOnPage = allWords.subList(fromIndex, toIndex);
+
+        StringBuilder sb = new StringBuilder();
+        String nativeLang = user.getNativeLanguage();
+
+        if (nativeLang.equals("ru")) {
+            sb.append("📖 Словарь (").append(currentPage + 1).append("/").append(totalPages).append("):\n\n");
+        } else {
+            sb.append("📖 词典 (").append(currentPage + 1).append("/").append(totalPages).append("):\n\n");
+        }
+
+        for (Word w : wordsOnPage) {
+            String wordLine;
+            if (w.getTranscription() != null && !w.getTranscription().isEmpty()) {
+                wordLine = "• " + w.getWord() + " (" + w.getTranscription() + ") — " + w.getTranslation();
+            } else {
+                wordLine = "• " + w.getWord() + " — " + w.getTranslation();
+            }
+            sb.append(wordLine).append("\n");
+        }
+
+        InlineKeyboardMarkup keyboard = createDictionaryInlineKeyboard(chatId, currentPage, totalPages, nativeLang);
+
+        editMessageText(chatId, messageId, sb.toString(), keyboard);
+    }
+
+    private void editMessageText(Long chatId, Integer messageId, String text, InlineKeyboardMarkup keyboard) {
+        try {
+            Map<String, Object> request = new HashMap<>();
+            request.put("chat_id", chatId);
+            request.put("message_id", messageId);
+            request.put("text", text);
+            request.put("parse_mode", "Markdown");
+            request.put("reply_markup", keyboard);
+
+            RestTemplate restTemplate = new RestTemplate();
+            restTemplate.postForObject(SEND_MESSAGE_URL + BOT_TOKEN + "/editMessageText", request, String.class);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void handleDictionaryCommand(Long chatId, String text) {
+        Optional<User> userOpt = userRepository.findByChatId(chatId);
+        if (userOpt.isEmpty()) {
+            sendMessage(chatId, "Ошибка: пользователь не найден.");
+            showMainMenu(chatId);
+            userStates.put(chatId, ConversationState.IN_MENU);
+            return;
+        }
+        String nativeLang = userOpt.map(User::getNativeLanguage).orElse("ru");
+
+        if (text.equals(nativeLang.equals("ru") ? "⬅️ Назад" : "⬅️ 上一页")) {
+            int currentPage = userDictionaryPage.getOrDefault(chatId, 0);
+            if (currentPage > 0) {
+                userDictionaryPage.put(chatId, currentPage - 1);
+            }
+            showDictionary(chatId);
+        } else if (text.equals(nativeLang.equals("ru") ? "Вперёд ➡️" : "下一页 ➡️")) {
+            int currentPage = userDictionaryPage.getOrDefault(chatId, 0);
+            int totalPages = (int) Math.ceil((double) wordRepository.findByLevelAndLang(
+                userOpt.get().getLevel(), userOpt.get().getTargetLanguage()).size() / 30.0);
+            if (currentPage < totalPages - 1) {
+                userDictionaryPage.put(chatId, currentPage + 1);
+            }
+            showDictionary(chatId);
+        } else if (text.equals(nativeLang.equals("ru") ? "🔙 Главное меню" : "🔙 主菜单")) {
+            userStates.put(chatId, ConversationState.IN_MENU);
+            showMainMenu(chatId);
+        } else {
+            showDictionary(chatId);
+        }
+    }
+
+    private void sendDictionaryPaginationKeyboard(Long chatId, int currentPage, int totalPages) {
+        String nativeLang = userRepository.findByChatId(chatId).map(User::getNativeLanguage).orElse("ru");
+
+        List<List<String>> buttons = new ArrayList<>();
+
+        List<String> navRow = new ArrayList<>();
+        if (currentPage > 0) {
+            navRow.add(nativeLang.equals("ru") ? "⬅️ Назад" : "⬅️ 上一页");
+        }
+        if (currentPage < totalPages - 1) {
+            navRow.add(nativeLang.equals("ru") ? "Вперёд ➡️" : "下一页 ➡️");
+        }
+        if (!navRow.isEmpty()) {
+            buttons.add(navRow);
+        }
+
+        buttons.add(List.of(nativeLang.equals("ru") ? "🔙 Главное меню" : "🔙 主菜单"));
+
+        sendMessageWithButtons(chatId, " ", buttons);
     }
 
     private void showMyWords(Long chatId) {
@@ -779,8 +1008,8 @@ public class TelegramService {
     }
 
     private enum ConversationState {
-        START, AWAITING_NATIVE_LANG, AWAITING_TARGET_LANG, AWAITING_LEVEL, 
-        IN_MENU, IN_MY_WORDS, IN_SENTENCE_GAME, IN_SETTINGS,
+        START, AWAITING_NATIVE_LANG, AWAITING_TARGET_LANG, AWAITING_LEVEL,
+        IN_MENU, IN_MY_WORDS, IN_SENTENCE_GAME, IN_SETTINGS, IN_DICTIONARY,
         AWAITING_NEW_NATIVE_LANG, AWAITING_NEW_TARGET_LANG, AWAITING_NEW_LEVEL
     }
 
