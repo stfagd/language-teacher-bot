@@ -385,12 +385,14 @@ public class TelegramService {
         if (nativeLang.equals("ru")) {
             gamesText = "🎲 *Выбери игру:*";
             gameButtons = List.of(
-                    List.of("Flash card (Карточки)", "Sentence (Составить предложение)")
+                    List.of("Flash card (Карточки)", "Sentence (Составить предложение)"),
+                    List.of("⬅️ Назад в меню")
             );
         } else {
             gamesText = "🎲 *选择游戏:*";
             gameButtons = List.of(
-                    List.of("Flash card (单词卡片)", "Sentence (造句)")
+                    List.of("Flash card (单词卡片)", "Sentence (造句)"),
+                    List.of("⬅️ 返回菜单")
             );
         }
 
