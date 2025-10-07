@@ -96,7 +96,15 @@ public class TelegramService {
                     int page = Integer.parseInt(data.split(":")[1]);
                     userDictionaryPage.put(chatId, page);
                     editMessageWithDictionary(chatId, messageId);
-                } else if (data.equals("main_menu")) {
+                } else if (data.startsWith("mywords_prev:")) {
+                    int page = Integer.parseInt(data.split(":")[1]);
+                    userDictionaryPage.put(chatId, page);
+                    editMessageWithMyWords(chatId, messageId);
+                } else if (data.startsWith("mywords_next:")) {
+                    int page = Integer.parseInt(data.split(":")[1]);
+                    userDictionaryPage.put(chatId, page);
+                    editMessageWithMyWords(chatId, messageId);
+                }else if (data.equals("main_menu")) {
                     showMainMenu(chatId);
                 }
                 return;
@@ -123,6 +131,16 @@ public class TelegramService {
             }
 
             ConversationState state = userStates.getOrDefault(chatId, ConversationState.START);
+
+            Optional<User> userOpt = userRepository.findByChatId(chatId);
+            String nativeLang = userOpt.map(User::getNativeLanguage).orElse("ru");
+            String backToMenuCmd = nativeLang.equals("ru") ? "⬅️ Назад в меню" : "⬅️ 返回菜单";
+
+            if (text.equals(backToMenuCmd)) {
+                showMainMenu(chatId);
+                return;
+            }
+
             switch (state) {
                 case START -> handleStart(chatId, firstName, lastName);
                 case AWAITING_NATIVE_LANG -> handleNativeLanguageSelection(chatId, text);
@@ -145,6 +163,44 @@ public class TelegramService {
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    private void editMessageWithMyWords(Long chatId, Integer messageId) {
+        Optional<User> userOpt = userRepository.findByChatId(chatId);
+        if (userOpt.isEmpty()) return;
+
+        List<UserWord> allUserWords = userWordRepository.findByUserChatId(chatId);
+        int pageSize = 30;
+        int totalPages = (int) Math.ceil((double) allUserWords.size() / pageSize);
+
+        int currentPage = userDictionaryPage.getOrDefault(chatId, 0);
+
+        int fromIndex = currentPage * pageSize;
+        int toIndex = Math.min(fromIndex + pageSize, allUserWords.size());
+        List<UserWord> wordsOnPage = allUserWords.subList(fromIndex, toIndex);
+
+        StringBuilder sb = new StringBuilder();
+        String nativeLang = userOpt.get().getNativeLanguage();
+
+        if (nativeLang.equals("ru")) {
+            sb.append("🔁 *Твои слова (Не знаю)* (").append(currentPage + 1).append("/").append(totalPages).append("):\n\n");
+        } else {
+            sb.append("🔁 *你的单词 (不认识)* (").append(currentPage + 1).append("/").append(totalPages).append("):\n\n");
+        }
+
+        for (int i = 0; i < wordsOnPage.size(); i++) {
+            UserWord uw = wordsOnPage.get(i);
+            String wordLine;
+            if (uw.getWord().getTranscription() != null && !uw.getWord().getTranscription().isEmpty()) {
+                wordLine = (currentPage * pageSize + i + 1) + ". " + uw.getWord().getWord() + " (" + uw.getWord().getTranscription() + ") — " + uw.getWord().getTranslation();
+            } else {
+                wordLine = (currentPage * pageSize + i + 1) + ". " + uw.getWord().getWord() + " — " + uw.getWord().getTranslation();
+            }
+            sb.append(wordLine).append("\n");
+        }
+
+        InlineKeyboardMarkup keyboard = createMyWordsInlineKeyboard(chatId, currentPage, totalPages, nativeLang);
+        editMessageText(chatId, messageId, sb.toString(), keyboard);
     }
 
     private void handleStart(Long chatId, String firstName, String lastName) {
@@ -332,6 +388,7 @@ public class TelegramService {
         String dictCmd = nativeLang.equals("ru") ? "📘 Словарь" : "📘 词典";
         String myWordsCmd = nativeLang.equals("ru") ? "🔁 Мои слова" : "🔁 我的单词";
         String settingsCmd = nativeLang.equals("ru") ? "⚙️ Настройки" : "⚙️ 设置";
+        String flashcardCmd = nativeLang.equals("ru") ? "Flash card (Карточки)" : "Flash card (单词卡片)";
 
         if (command.equals(gamesCmd)) {
             showGamesMenu(chatId);
@@ -349,7 +406,17 @@ public class TelegramService {
                 handleStart(chatId, "User", "");
             }
         } else if (command.equals(nativeLang.equals("ru") ? "Flash card (Карточки)" : "Flash card (单词卡片)")) {
-            startFlashcardGame(chatId);
+            showFlashcardOptions(chatId);
+        } else if (command.matches("^(10|20|30|45|60|90) (слов|个词)$")) {
+            int amount = Integer.parseInt(command.split(" ")[0]);
+            startFlashcardGame(chatId, amount, false);
+        } else if (command.equals(flashcardCmd)) {
+            showFlashcardOptions(chatId);
+            return;
+        } else if (command.contains("Все слова") || command.contains("全部单词")) {
+            startFlashcardGame(chatId, null, false);
+        } else if (command.contains("Только мои слова") || command.contains("仅我的单词")) {
+            startFlashcardGame(chatId, null, true);
         } else if (command.equals(nativeLang.equals("ru") ? "Sentence (Составить предложение)" : "Sentence (造句)")) {
             startSentenceGame(chatId);
         } else if (command.equals(nativeLang.equals("ru") ? "⬅️ Назад" : "⬅️ 上一页")) {
@@ -399,7 +466,7 @@ public class TelegramService {
         sendMessageWithButtons(chatId, gamesText, gameButtons);
     }
 
-    private void startFlashcardGame(Long chatId) {
+    private void startFlashcardGame(Long chatId, Integer amount, boolean useMyWordsOnly) {
         Optional<User> userOpt = userRepository.findByChatId(chatId);
         if (userOpt.isEmpty()) {
             sendMessage(chatId, "Ошибка: пользователь не найден.");
@@ -408,21 +475,30 @@ public class TelegramService {
         }
 
         User user = userOpt.get();
-        List<Word> words = wordRepository.findByLevelAndLang(user.getLevel(), user.getTargetLanguage());
+        List<Word> words;
+
+        if (useMyWordsOnly) {
+            List<UserWord> userWords = userWordRepository.findByUserChatId(chatId);
+            words = userWords.stream().map(UserWord::getWord).collect(Collectors.toList());
+        } else {
+            words = wordRepository.findByLevelAndLang(user.getLevel(), user.getTargetLanguage());
+        }
 
         if (words.isEmpty()) {
             String nativeLang = user.getNativeLanguage();
-            String message = nativeLang.equals("ru") ? "😔 Нет слов для этого уровня. Попробуй другой уровень или язык." : "😔 此级别没有单词。尝试其他级别或语言。";
+            String message = nativeLang.equals("ru") ? "😔 Нет слов для игры." : "😔 没有可游戏的单词。";
             sendMessage(chatId, message);
             showMainMenu(chatId);
             return;
         }
 
-        Collections.shuffle(words);
+        if (amount != null && amount < words.size()) {
+            Collections.shuffle(words);
+            words = words.subList(0, amount);
+        }
 
         FlashcardGameSession session = new FlashcardGameSession(chatId, "flashcard", words, 0);
         activeFlashcardGames.put(chatId, session);
-
         sendFlashcard(chatId, session);
     }
 
@@ -440,18 +516,61 @@ public class TelegramService {
         Optional<User> userOpt = userRepository.findByChatId(chatId);
         String nativeLang = userOpt.map(User::getNativeLanguage).orElse("ru");
 
+        String wordDisplay;
+        if (currentWord.getTranscription() != null && !currentWord.getTranscription().isEmpty()) {
+            wordDisplay = currentWord.getWord() + " (" + currentWord.getTranscription() + ")";
+        } else {
+            wordDisplay = currentWord.getWord();
+        }
+
         String question;
         String instruction;
         if (nativeLang.equals("ru")) {
-            question = "🔤 *Переведи слово:*\n\n" + currentWord.getWord();
+            question = "🔤 *Переведи слово:*\n\n" + wordDisplay;
             instruction = "\n\n(Напиши перевод или нажми 'Не знаю')";
         } else {
-            question = "🔤 *翻译单词:*\n\n" + currentWord.getWord();
+            question = "🔤 *翻译单词:*\n\n" + wordDisplay;
             instruction = "\n\n(写下翻译或点击“不认识”)";
         }
 
-        List<List<String>> buttons = List.of(List.of(nativeLang.equals("ru") ? "Не знаю" : "不认识"));
+        String dontKnowButton = nativeLang.equals("ru") ? "Не знаю" : "不认识";
+        String backToMenuButton = nativeLang.equals("ru") ? "Вернуться в меню" : "返回菜单";
+
+        List<List<String>> buttons = List.of(
+            List.of(dontKnowButton, backToMenuButton)
+        );
+
         sendMessageWithButtons(chatId, question + instruction, buttons);
+    }
+
+    private void showFlashcardOptions(Long chatId) {
+        Optional<User> userOpt = userRepository.findByChatId(chatId);
+        String nativeLang = userOpt.map(User::getNativeLanguage).orElse("ru");
+
+        String text;
+        List<List<String>> buttons;
+
+        if (nativeLang.equals("ru")) {
+            text = "⚙️ *Настройки игры 'Карточки':*\n\n" +
+                "Выбери количество слов и источник:";
+            buttons = List.of(
+                List.of("10 слов", "20 слов", "30 слов"),
+                List.of("45 слов", "60 слов", "90 слов"),
+                List.of("Все слова", "Только мои слова"),
+                List.of("⬅️ Назад в меню")
+            );
+        } else {
+            text = "⚙️ *“单词卡片”游戏设置:*\n\n" +
+                "选择单词数量和来源：";
+            buttons = List.of(
+                List.of("10 个词", "20 个词", "30 个词"),
+                List.of("45 个词", "60 个词", "90 个词"),
+                List.of("全部单词", "仅我的单词"),
+                List.of("⬅️ 返回菜单")
+            );
+        }
+
+        sendMessageWithButtons(chatId, text, buttons);
     }
 
     private void handleFlashcardGameInput(Long chatId, String userAnswer) {
@@ -465,7 +584,6 @@ public class TelegramService {
         List<Word> words = session.getWords();
         int index = session.getCurrentIndex();
         Word currentWord = words.get(index);
-
         String correctAnswer = currentWord.getTranslation();
 
         Optional<User> userOpt = userRepository.findByChatId(chatId);
@@ -475,6 +593,7 @@ public class TelegramService {
         String dontKnowButton = nativeLang.equals("ru") ? "Не знаю" : "不认识";
 
         if (userAnswer.equals(dontKnowButton)) {
+            session.incrementDontKnowCount();
             if (nativeLang.equals("ru")) {
                 response = "🔹 Правильный перевод: *" + correctAnswer + "*";
             } else {
@@ -482,7 +601,17 @@ public class TelegramService {
             }
             addToMyWords(chatId, currentWord);
         } else {
-            if (userAnswer.trim().equalsIgnoreCase(correctAnswer)) {
+            String[] correctAnswers = correctAnswer.split(",");
+            boolean isCorrect = false;
+            for (String correct : correctAnswers) {
+                if (userAnswer.trim().equalsIgnoreCase(correct.trim())) {
+                    isCorrect = true;
+                    break;
+                }
+            }
+
+            if (isCorrect) {
+                session.incrementCorrectCount();
                 if (nativeLang.equals("ru")) {
                     response = "✅ Правильно!";
                 } else {
@@ -490,9 +619,9 @@ public class TelegramService {
                 }
             } else {
                 if (nativeLang.equals("ru")) {
-                    response = "❌ Неправильно.\nПравильный перевод: *" + correctAnswer + "*";
+                    response = "❌ Неправильно. \nПравильный перевод: *" + correctAnswer + "*";
                 } else {
-                    response = "❌ 错误。\n正确翻译: *" + correctAnswer + "*";
+                    response = "❌ 错误。\n 正确翻译: *" + correctAnswer + "*";
                 }
                 addToMyWords(chatId, currentWord);
             }
@@ -516,6 +645,20 @@ public class TelegramService {
 
         Optional<User> userOpt = userRepository.findByChatId(chatId);
         String nativeLang = userOpt.map(User::getNativeLanguage).orElse("ru");
+
+        long timeSpent = (System.currentTimeMillis() - session.getStartTime()) / 1000;
+        int correct = session.getCorrectCount();
+        int dontKnow = session.getDontKnowCount();
+        int total = session.getWords().size();
+
+        String stats;
+        if (nativeLang.equals("ru")) {
+            stats = "📊 *Статистика игры:*" + "\nПравильно: " + correct + "/" + total + " " + "\nНе знаю: " + dontKnow + " " + "\nВремя игры: " + timeSpent + " секунд";
+        } else {
+            stats = "📊 *游戏统计:*" + "\n正确: " + correct + "/" + total + " " + "\n不认识: " + dontKnow + " " + "\n游戏时间: " + timeSpent + " 秒";
+        }
+
+        sendMessage(chatId, stats);
 
         String finishMessage;
         if (nativeLang.equals("ru")) {
@@ -853,8 +996,8 @@ public class TelegramService {
             return;
         }
 
-        List<UserWord> userWords = userWordRepository.findByUserChatId(chatId);
-        if (userWords.isEmpty()) {
+        List<UserWord> allUserWords = userWordRepository.findByUserChatId(chatId);
+        if (allUserWords.isEmpty()) {
             String nativeLang = userOpt.get().getNativeLanguage();
             String message = nativeLang.equals("ru") ? "🔁 Ты ещё не отметил ни одного слова как 'не знаю'." : "🔁 你还没有标记任何单词为“不认识”。";
             sendMessage(chatId, message);
@@ -862,42 +1005,78 @@ public class TelegramService {
             return;
         }
 
-        String nativeLang = userOpt.get().getNativeLanguage();
-        String myWordsTitle = nativeLang.equals("ru") ? "🔁 *Твои слова (Не знаю)*\n\n" : "🔁 *你的单词 (不认识)*\n\n";
+        int currentPage = userDictionaryPage.getOrDefault(chatId, 0);
+        int pageSize = 30;
+        int totalPages = (int) Math.ceil((double) allUserWords.size() / pageSize);
+
+        if (currentPage >= totalPages) {
+            currentPage = Math.max(0, totalPages - 1);
+            userDictionaryPage.put(chatId, currentPage);
+        }
+        if (currentPage < 0) {
+            currentPage = 0;
+            userDictionaryPage.put(chatId, currentPage);
+        }
+
+        int fromIndex = currentPage * pageSize;
+        int toIndex = Math.min(fromIndex + pageSize, allUserWords.size());
+        List<UserWord> wordsOnPage = allUserWords.subList(fromIndex, toIndex);
 
         StringBuilder sb = new StringBuilder();
-        sb.append(myWordsTitle);
+        String nativeLang = userOpt.get().getNativeLanguage();
 
-        List<List<String>> buttons = new ArrayList<>();
-        List<String> row = new ArrayList<>();
-        Map<String, Long> deleteMap = new HashMap<>();
+        if (nativeLang.equals("ru")) {
+            sb.append("🔁 *Твои слова (Не знаю)* (").append(currentPage + 1).append("/").append(totalPages).append("):\n\n");
+        } else {
+            sb.append("🔁 *你的单词 (不认识)* (").append(currentPage + 1).append("/").append(totalPages).append("):\n\n");
+        }
 
-        for (int i = 0; i < Math.min(userWords.size(), 20); i++) {
-            UserWord uw = userWords.get(i);
-            sb.append((i+1)).append(". ").append(uw.getWord().getWord()).append(" - ").append(uw.getWord().getTranslation()).append("\n");
-
-            String buttonText = nativeLang.equals("ru") ? "❌ " : "❌ ";
-            buttonText += uw.getWord().getWord();
-            deleteMap.put(buttonText, uw.getWord().getId());
-            row.add(buttonText);
-
-            if (row.size() == 2) {
-                buttons.add(new ArrayList<>(row));
-                row.clear();
+        for (int i = 0; i < wordsOnPage.size(); i++) {
+            UserWord uw = wordsOnPage.get(i);
+            String wordLine;
+            if (uw.getWord().getTranscription() != null && !uw.getWord().getTranscription().isEmpty()) {
+                wordLine = (currentPage * pageSize + i + 1) + ". " + uw.getWord().getWord() + " (" + uw.getWord().getTranscription() + ") — " + uw.getWord().getTranslation();
+            } else {
+                wordLine = (currentPage * pageSize + i + 1) + ". " + uw.getWord().getWord() + " — " + uw.getWord().getTranslation();
             }
+            sb.append(wordLine).append("\n");
         }
 
-        if (!row.isEmpty()) {
-            buttons.add(row);
+        InlineKeyboardMarkup keyboard = createMyWordsInlineKeyboard(chatId, currentPage, totalPages, nativeLang);
+        sendMessageWithInlineKeyboard(chatId, sb.toString(), keyboard);
+    }
+
+    private InlineKeyboardMarkup createMyWordsInlineKeyboard(Long chatId, int currentPage, int totalPages, String nativeLang) {
+        InlineKeyboardMarkup keyboard = new InlineKeyboardMarkup();
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+
+        List<InlineKeyboardButton> navRow = new ArrayList<>();
+        if (currentPage > 0) {
+            InlineKeyboardButton backButton = new InlineKeyboardButton();
+            backButton.setText(nativeLang.equals("ru") ? "⬅️ Назад" : "⬅️ 上一页");
+            backButton.setCallbackData("mywords_prev:" + (currentPage - 1));
+            navRow.add(backButton);
+        }
+        if (currentPage < totalPages - 1) {
+            InlineKeyboardButton nextButton = new InlineKeyboardButton();
+            nextButton.setText(nativeLang.equals("ru") ? "Вперёд ➡️" : "下一页 ➡️");
+            nextButton.setCallbackData("mywords_next:" + (currentPage + 1));
+            navRow.add(nextButton);
         }
 
-        String backButtonText = nativeLang.equals("ru") ? "⬅️ Назад в меню" : "⬅️ 返回菜单";
-        buttons.add(List.of(backButtonText));
+        if (!navRow.isEmpty()) {
+            rows.add(navRow);
+        }
 
-        userWordDeleteMap.put(chatId, deleteMap);
+        List<InlineKeyboardButton> menuRow = new ArrayList<>();
+        InlineKeyboardButton menuButton = new InlineKeyboardButton();
+        menuButton.setText(nativeLang.equals("ru") ? "🔙 Главное меню" : "🔙 主菜单");
+        menuButton.setCallbackData("main_menu");
+        menuRow.add(menuButton);
+        rows.add(menuRow);
 
-        sendMessageWithButtons(chatId, sb.toString(), buttons);
-        userStates.put(chatId, ConversationState.IN_MY_WORDS);
+        keyboard.setKeyboard(rows);
+        return keyboard;
     }
 
     private void handleMyWordsCommand(Long chatId, String command) {
@@ -1195,12 +1374,16 @@ public class TelegramService {
         private final String gameType;
         private final List<Word> words;
         private int currentIndex;
+        private int correctCount = 0;
+        private int dontKnowCount = 0;
+        private final long startTime;
 
         public FlashcardGameSession(Long userId, String gameType, List<Word> words, int currentIndex) {
             this.userId = userId;
             this.gameType = gameType;
             this.words = new ArrayList<>(words);
             this.currentIndex = currentIndex;
+            this.startTime = System.currentTimeMillis();
         }
 
         public Long getUserId() { return userId; }
@@ -1208,6 +1391,14 @@ public class TelegramService {
         public List<Word> getWords() { return words; }
         public int getCurrentIndex() { return currentIndex; }
         public void setCurrentIndex(int currentIndex) { this.currentIndex = currentIndex; }
+
+        public int getCorrectCount() { return correctCount; }
+        public void incrementCorrectCount() { this.correctCount++; }
+
+        public int getDontKnowCount() { return dontKnowCount; }
+        public void incrementDontKnowCount() { this.dontKnowCount++; }
+
+        public long getStartTime() { return startTime; }
     }
 
     private static class SentenceGameSession {
